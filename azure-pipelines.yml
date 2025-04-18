@@ -5,7 +5,7 @@ pool:
   vmImage: "ubuntu-latest"
 
 variables:
-  - group: IAC  # <-- Your Azure DevOps variable group name
+  - group: IAC  # Your Azure DevOps Library variable group
 
 stages:
   - stage: TerraformPlan
