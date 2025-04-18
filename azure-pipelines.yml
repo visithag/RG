@@ -1,47 +1,110 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
-name: Terraform deploy Log Analytics
+name: Terraform deploy Resource Group
 
 trigger:
   - main
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: "ubuntu-latest"
 
 variables:
-  azureServiceConnection: 'iactest'  
+  - group: IAC
+  - name: terraformVersion
+    value: "1.7.5"
 
 stages:
   - stage: Plan
-    displayName: 'Terraform Plan'
+    displayName: "Terraform Plan"
     jobs:
       - job: TerraformPlan
-        displayName: 'Terraform Plan'
+        displayName: "Terraform Plan"
         steps:
-          # Step 1: Initialize and Plan Terraform
-          - task: AzureCLI@2
-            inputs:
-              azureSubscription: $(azureServiceConnection)  # The service connection defined in your pipeline
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                echo "Setting up Azure authentication using the service principal credentials from the service connection"
-                echo "Terraform init..."
-                terraform init
-                echo "Terrform plan..."
-                terraform plan
-            displayName: 'Terraform init and plan'
-          
-          # Step 2: Deploy
-          - task: AzureCLI@2
-            inputs:
-              azureSubscription: $(azureServiceConnection)  # The service connection defined in your pipeline
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                echo "Terraform apply"
-                terraform apply -auto-approve
-            displayName: 'Terraform apply'
+          # Checkout Repository
+          - checkout: self
+            persistCredentials: true
+
+          # Install unzip and wget
+          - script: |
+              sudo apt-get update
+              sudo apt-get install -y unzip wget
+            displayName: "Install unzip wget"
+
+          # Install Terraform
+          - script: |
+              echo "Downloading Terraform v$(terraformVersion)..."
+              wget https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_${{ variables.terraformVersion }}_linux_amd64.zip
+              unzip terraform_${{ variables.terraformVersion }}_linux_amd64.zip
+              sudo mv terraform /usr/local/bin/
+              terraform -version
+            displayName: "Install Terraform CLI"
+
+          # Terraform Init
+          - script: |
+              terraform init \
+                -backend-config="resource_group_name=IAC-TEST" \
+                -backend-config="storage_account_name=jkitterraform" \
+                -backend-config="container_name=tfstate" \
+                -backend-config="key=terraform.tfstate"
+            displayName: "Terraform Init"
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+
+          # Terraform Plan
+          - script: |
+              terraform plan -out=tfplan
+            displayName: "Terraform Plan"
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+
+          # Publish tfplan as artifact
+          - publish: tfplan
+            artifact: tfplan
+
+  - stage: Apply
+    displayName: "Terraform Apply"
+    dependsOn: Plan
+    jobs:
+      - job: TerraformApply
+        displayName: "Terraform Apply"
+        steps:
+          # Checkout Repository (Important: for .terraform.lock.hcl)
+          - checkout: self
+
+          # Download tfplan artifact
+          - download: current
+            artifact: tfplan
+
+          # Move tfplan to working directory
+          - script: |
+              cp $(Pipeline.Workspace)/tfplan/tfplan ./tfplan
+            displayName: "Copy tfplan to working directory"
+
+          # Install unzip and wget
+          - script: |
+              sudo apt-get update
+              sudo apt-get install -y unzip wget
+            displayName: "Install unzip wget"
+
+          # Install Terraform
+          - script: |
+              echo "Downloading Terraform v$(terraformVersion)..."
+              wget https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_${{ variables.terraformVersion }}_linux_amd64.zip
+              unzip terraform_${{ variables.terraformVersion }}_linux_amd64.zip
+              sudo mv terraform /usr/local/bin/
+              terraform -version
+            displayName: "Install Terraform CLI"
+
+          # Terraform Apply
+          - script: |
+              terraform apply -auto-approve tfplan
+            displayName: "Terraform Apply"
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
