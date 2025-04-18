@@ -1,3 +1,5 @@
+name: Terraform deploy Resource Group
+
 trigger:
   - main
 
@@ -5,35 +7,43 @@ pool:
   vmImage: "ubuntu-latest"
 
 variables:
-  - group: IAC  # Your Azure DevOps Library variable group
+  - group: IAC
+  - name: terraformVersion
+    value: "1.7.5"
 
 stages:
-  - stage: TerraformPlan
+  - stage: Plan
     displayName: "Terraform Plan"
     jobs:
-      - job: Plan
+      - job: TerraformPlan
         displayName: "Terraform Plan"
         steps:
+          # 1. Checkout Repository
           - checkout: self
+            persistCredentials: true
 
+          # 2. Install unzip and wget
           - script: |
               sudo apt-get update
-              sudo apt-get install -y wget unzip
-            displayName: "Install wget and unzip"
+              sudo apt-get install -y unzip wget
+            displayName: "Install unzip and wget"
 
+          # 3. Install Terraform
           - script: |
-              wget https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
-              unzip terraform_1.7.5_linux_amd64.zip
+              echo "Downloading Terraform v$(terraformVersion)..."
+              wget https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_${{ variables.terraformVersion }}_linux_amd64.zip
+              unzip terraform_${{ variables.terraformVersion }}_linux_amd64.zip
               sudo mv terraform /usr/local/bin/
               terraform -version
-            displayName: "Install Terraform"
+            displayName: "Install Terraform CLI"
 
+          # 4. Terraform Init
           - script: |
               terraform init \
-                -backend-config="resource_group_name=$(backend_resource_group_name)" \
-                -backend-config="storage_account_name=$(backend_storage_account_name)" \
-                -backend-config="container_name=$(backend_container_name)" \
-                -backend-config="key=$(backend_key)"
+                -backend-config="resource_group_name=IAC-TEST" \
+                -backend-config="storage_account_name=jkitterraform" \
+                -backend-config="container_name=tfstate" \
+                -backend-config="key=terraform.tfstate"
             displayName: "Terraform Init"
             env:
               ARM_CLIENT_ID: $(ARM_CLIENT_ID)
@@ -41,11 +51,9 @@ stages:
               ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
               ARM_TENANT_ID: $(ARM_TENANT_ID)
 
+          # 5. Terraform Plan
           - script: |
-              terraform plan \
-                -out=tfplan \
-                -var "resource_group_name=$(resource_group_name)" \
-                -var "location=$(location)"
+              terraform plan -out=tfplan
             displayName: "Terraform Plan"
             env:
               ARM_CLIENT_ID: $(ARM_CLIENT_ID)
@@ -53,37 +61,45 @@ stages:
               ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
               ARM_TENANT_ID: $(ARM_TENANT_ID)
 
+          # 6. Publish tfplan as artifact
           - publish: tfplan
             artifact: tfplan
 
-  - stage: TerraformApply
+  - stage: Apply
     displayName: "Terraform Apply"
-    dependsOn: TerraformPlan
+    dependsOn: Plan
     jobs:
-      - job: Apply
+      - job: TerraformApply
         displayName: "Terraform Apply"
         steps:
+          # 1. Checkout Repository (Important: Ensures .terraform.lock.hcl is available)
           - checkout: self
 
+          # 2. Download tfplan artifact
           - download: current
             artifact: tfplan
 
-          - script: |
-              sudo apt-get update
-              sudo apt-get install -y wget unzip
-            displayName: "Install wget and unzip"
-
-          - script: |
-              wget https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
-              unzip terraform_1.7.5_linux_amd64.zip
-              sudo mv terraform /usr/local/bin/
-              terraform -version
-            displayName: "Install Terraform"
-
+          # 3. Move tfplan to working directory
           - script: |
               cp $(Pipeline.Workspace)/tfplan/tfplan ./tfplan
             displayName: "Copy tfplan to working directory"
 
+          # 4. Install unzip and wget
+          - script: |
+              sudo apt-get update
+              sudo apt-get install -y unzip wget
+            displayName: "Install unzip and wget"
+
+          # 5. Install Terraform
+          - script: |
+              echo "Downloading Terraform v$(terraformVersion)..."
+              wget https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_${{ variables.terraformVersion }}_linux_amd64.zip
+              unzip terraform_${{ variables.terraformVersion }}_linux_amd64.zip
+              sudo mv terraform /usr/local/bin/
+              terraform -version
+            displayName: "Install Terraform CLI"
+
+          # 6. Terraform Apply
           - script: |
               terraform apply -auto-approve tfplan
             displayName: "Terraform Apply"
